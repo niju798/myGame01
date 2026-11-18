@@ -20,11 +20,14 @@
   const CAMERA_SMOOTHING_MS = 260;
   const MIN_SPAWN_INTERVAL = 2400;
   const MAX_SPAWN_INTERVAL = 3600;
+  const MERGE_CHANCE = 0.7;
+  const MAX_MERGED_SHARE = 0.4;
   const state = {
     width: innerWidth, height: innerHeight, dpr: 1,
     screen: "home", time: 0, lastFrame: 0, nextSpawnAt: 0, lastRipple: 0,
     score: 0, health: 3, high: 0, spaceHeld: false,
-    camera: { x: 0, y: 0, zoom: CAMERA_ZOOM, initialized: false },
+    zoomOutPercent: 200, nextEnemyCNumberEven: true,
+    camera: { x: 0, y: 0, zoom: CAMERA_ZOOM / 2, initialized: false },
     player: { x: 0, y: 0, size: 50, speed: 5, remX: 0, remY: 0 },
     enemies: [], rockets: [], enemyShots: [], grenades: [], nukes: [],
     shockwaves: [], explosions: [], blasts: [], ripples: [],
@@ -100,6 +103,10 @@
     if (Number.isFinite(saved.controlSize) && saved.controlSize >= 0.65 && saved.controlSize <= 1.6) {
       state.controlSize = saved.controlSize;
     }
+    if (Number.isFinite(saved.zoomOutPercent)) {
+      state.zoomOutPercent = clamp(Math.round(saved.zoomOutPercent / 10) * 10, 200, 300);
+      state.camera.zoom = CAMERA_ZOOM / (state.zoomOutPercent / 100);
+    }
     if (saved.layout && typeof saved.layout === "object") {
       for (const name of Object.keys(state.layout)) {
         const p = saved.layout[name];
@@ -116,6 +123,7 @@
     try {
       localStorage.setItem(STORE.settings, JSON.stringify({
         controlSize: state.controlSize,
+        zoomOutPercent: state.zoomOutPercent,
         layout: state.layout,
       }));
       state.settingsMessage = "Settings saved";
@@ -155,7 +163,7 @@
         ];
       }
     }
-    state.orbitRadius = Math.min(state.width, state.height) * 0.4;
+    state.orbitRadius = Math.min(state.width, state.height) * 0.4 / state.camera.zoom;
   }
 
   function controlMetrics() {
@@ -227,18 +235,19 @@
   }
 
   function spawnEnemyWave() {
-    const visibleRadius = Math.min(state.width, state.height) / state.camera.zoom / 2;
+    const visibleRadius = Math.hypot(state.width, state.height) / state.camera.zoom / 2;
     for (let i = 0; i < 8; i++) {
       const angle = Math.random() * TAU;
-      const orbitRadius = visibleRadius * (1.15 + Math.random() * 0.7);
+      const spawnDistance = visibleRadius * (0.8 + Math.random() * 1.6);
+      const cNumber = randomEnemyCNumber();
       const p = playerCenter();
       const position = {
-        x: p.x + Math.cos(angle) * orbitRadius,
-        y: p.y + Math.sin(angle) * orbitRadius,
+        x: p.x + Math.cos(angle) * spawnDistance,
+        y: p.y + Math.sin(angle) * spawnDistance,
       };
       state.enemies.push({
-        x: position.x, y: position.y, size: 30,
-        orbitRadius,
+        x: position.x, y: position.y, size: 30, cNumber,
+        enemyCount: 1, maxHp: 100, mergeAttempted: false,
         orbitDirection: Math.random() < 0.5 ? -1 : 1,
         orbitSpeed: 0.0025 + Math.random() * 0.0025,
         nextShot: state.time + 4000, hp: 100, pullTarget: null, pullUntil: 0,
@@ -246,12 +255,27 @@
     }
   }
 
+  function randomEnemyCNumber() {
+    const parity = state.nextEnemyCNumberEven ? 0 : 1;
+    state.nextEnemyCNumberEven = !state.nextEnemyCNumberEven;
+    const candidates = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      .filter((number) => number % 2 === parity);
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+
+  function setZoomOut(percent) {
+    state.zoomOutPercent = clamp(percent, 200, 300);
+    state.camera.zoom = CAMERA_ZOOM / (state.zoomOutPercent / 100);
+    state.orbitRadius = Math.min(state.width, state.height) * 0.4 / state.camera.zoom;
+    saveSettings();
+  }
+
   function damageEnemy(enemy, damage) {
     enemy.hp -= damage;
     if (enemy.hp > 0) return;
     const index = state.enemies.indexOf(enemy);
     if (index >= 0) state.enemies.splice(index, 1);
-    state.score += 3;
+    state.score += 3 * enemy.enemyCount;
     const particles = [];
     for (let i = 0; i < 14; i++) {
       const angle = Math.random() * TAU;
@@ -291,6 +315,7 @@
     state.skill.start = null;
     state.skill.direction = null;
     state.nextSpawnAt = state.time + randomSpawnInterval();
+    state.nextEnemyCNumberEven = true;
     state.lastRipple = state.time;
     for (const key of ["enemies", "rockets", "enemyShots", "grenades", "nukes",
       "shockwaves", "explosions", "blasts", "ripples"]) state[key].length = 0;
@@ -521,13 +546,18 @@
     } else if (state.screen === "settings") {
       label("SETTINGS", state.width / 2, py + 40, fontSize(26), COLORS.text, true);
       drawControls(true);
-      label("Drag a control to move it", state.width / 2, py + 80, fontSize(16), COLORS.muted);
+      const instructionY = py + (wide && panelH < 320 ? 68 : 80);
+      label("Drag a control to move it", state.width / 2, instructionY, fontSize(16), COLORS.muted);
       const bw = Math.min(190, (panelW - 48) / 2);
       const bh = Math.max(40, Math.min(48, state.height * 0.066));
       const row = py + panelH - bh * 2.3;
       makeButton("sizeDown", "SIZE −", state.width / 2 - bw * 0.55, row, bw, bh, COLORS.blue);
       makeButton("sizeUp", "SIZE +", state.width / 2 + bw * 0.55, row, bw, bh, COLORS.blue);
       label(`CONTROL SIZE  ${Math.round(state.controlSize * 100)}%`, state.width / 2, row - bh * 0.75, fontSize(16), COLORS.cyan);
+      const zoomRow = row - bh * 2.15;
+      makeButton("zoomDown", "ZOOM −", state.width / 2 - bw * 0.55, zoomRow, bw, bh, COLORS.blue);
+      makeButton("zoomUp", "ZOOM +", state.width / 2 + bw * 0.55, zoomRow, bw, bh, COLORS.blue);
+      label(`ZOOM OUT  ${state.zoomOutPercent}%`, state.width / 2, zoomRow - bh * 0.75, fontSize(16), COLORS.cyan);
       makeButton("reset", "RESET", state.width / 2 - bw * 0.55, py + panelH - bh * 0.85, bw, bh, COLORS.purple);
       makeButton("settingsDone", "DONE", state.width / 2 + bw * 0.55, py + panelH - bh * 0.85, bw, bh, COLORS.green);
       if (state.settingsMessage) label(state.settingsMessage, state.width / 2, py + panelH - bh * 1.55, fontSize(14), COLORS.muted);
@@ -672,9 +702,16 @@
     } else if (name === "sizeUp") {
       state.controlSize = Math.min(1.6, Math.round((state.controlSize + 0.1) * 100) / 100);
       saveSettings();
+    } else if (name === "zoomDown") {
+      setZoomOut(state.zoomOutPercent - 10);
+    } else if (name === "zoomUp") {
+      setZoomOut(state.zoomOutPercent + 10);
     } else if (name === "reset") {
       state.layout = defaultLayout();
       state.controlSize = 1;
+      state.zoomOutPercent = 200;
+      state.camera.zoom = CAMERA_ZOOM / 2;
+      state.orbitRadius = Math.min(state.width, state.height) * 0.4 / state.camera.zoom;
       saveSettings();
     } else if (name === "resume") setScreen("playing");
     else if (name === "returnHome") setScreen("home");
@@ -825,10 +862,9 @@
         const ry = dy / d;
         const tx = -ry * enemy.orbitDirection;
         const ty = rx * enemy.orbitDirection;
-        const orbitRadius = enemy.orbitRadius ?? state.orbitRadius;
-        const radial = clamp((d - orbitRadius) * 0.02, -2, 2);
-        enemy.x += (rx * radial + tx * enemy.orbitSpeed * orbitRadius) * factor;
-        enemy.y += (ry * radial + ty * enemy.orbitSpeed * orbitRadius) * factor;
+        const radial = clamp((d - state.orbitRadius) * 0.02, -2, 2);
+        enemy.x += (rx * radial + tx * enemy.orbitSpeed * state.orbitRadius) * factor;
+        enemy.y += (ry * radial + ty * enemy.orbitSpeed * state.orbitRadius) * factor;
       }
     }
     if (state.time >= enemy.nextShot) {
@@ -839,6 +875,70 @@
         x: start.x, y: start.y, direction: dir, size: 10, trail: [],
       });
       enemy.nextShot = state.time + 1800 + Math.random() * 800;
+    }
+  }
+
+  function mergeNearbyEnemies() {
+    const totalEnemyCount = state.enemies.reduce(
+      (total, enemy) => total + enemy.enemyCount, 0,
+    );
+    let mergedEnemyCount = totalEnemyCount - state.enemies.length;
+    const absorbed = new Set();
+    const cellSize = 128;
+    const cells = new Map();
+    const cellKey = (x, y) => `${x},${y}`;
+
+    for (const enemy of state.enemies) {
+      const cellX = Math.floor(enemy.x / cellSize);
+      const cellY = Math.floor(enemy.y / cellSize);
+      const key = cellKey(cellX, cellY);
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(enemy);
+    }
+
+    for (const lower of state.enemies) {
+      if (lower.mergeAttempted) continue;
+      const cellX = Math.floor(lower.x / cellSize);
+      const cellY = Math.floor(lower.y / cellSize);
+      let attempted = false;
+
+      for (let x = cellX - 1; x <= cellX + 1 && !attempted; x++) {
+        for (let y = cellY - 1; y <= cellY + 1 && !attempted; y++) {
+          for (const higher of cells.get(cellKey(x, y)) || []) {
+            if (lower === higher || absorbed.has(higher) ||
+                lower.cNumber >= higher.cNumber) continue;
+            const separation = distance(lower, higher);
+            const contactDistance = (lower.size + higher.size) * 0.55;
+            if (separation > 110) continue;
+            if (separation > contactDistance) {
+              const pull = Math.min(3, separation - contactDistance);
+              lower.x += (higher.x - lower.x) / separation * pull;
+              lower.y += (higher.y - lower.y) / separation * pull;
+              attempted = true;
+              break;
+            }
+            if (mergedEnemyCount + lower.enemyCount > totalEnemyCount * MAX_MERGED_SHARE) {
+              attempted = true;
+              break;
+            }
+
+            lower.mergeAttempted = true;
+            attempted = true;
+            if (Math.random() >= MERGE_CHANCE) break;
+
+            higher.enemyCount += lower.enemyCount;
+            higher.hp += lower.hp;
+            higher.maxHp += lower.maxHp;
+            higher.size = Math.min(60, 30 * Math.sqrt(higher.enemyCount));
+            mergedEnemyCount += lower.enemyCount;
+            absorbed.add(lower);
+            break;
+          }
+        }
+      }
+    }
+    if (absorbed.size) {
+      state.enemies = state.enemies.filter((enemy) => !absorbed.has(enemy));
     }
   }
 
@@ -962,6 +1062,7 @@
       state.nextSpawnAt = state.time + randomSpawnInterval();
     }
     for (const enemy of state.enemies) updateEnemy(enemy, factor);
+    mergeNearbyEnemies();
     updateProjectiles(factor);
     for (const wave of [...state.shockwaves]) if (state.time - wave.start >= 900) remove(state.shockwaves, wave);
     for (const blast of [...state.blasts]) if (state.time - blast.start >= 1400) remove(state.blasts, blast);
@@ -1035,7 +1136,7 @@
       ctx.shadowBlur = 10;
       ctx.fillRect(x, y, enemy.size, enemy.size);
       ctx.shadowBlur = 0;
-      const ratio = clamp(enemy.hp / 100, 0, 1);
+      const ratio = clamp(enemy.hp / enemy.maxHp, 0, 1);
       ctx.fillStyle = "rgba(55, 25, 35, .9)";
       ctx.fillRect(x, y - 8, enemy.size, 4);
       ctx.fillStyle = `rgb(${Math.round(220 * (1 - ratio) + 35)}, ${Math.round(190 * ratio + 30)}, 65)`;
@@ -1091,6 +1192,14 @@
       ctx.stroke();
     } else state.crosshair = null;
     ctx.restore();
+
+    for (const enemy of state.enemies) {
+      const position = worldToScreen(enemy);
+      if (position.x < -24 || position.x > state.width + 24 ||
+          position.y < -24 || position.y > state.height + 24) continue;
+      label(`C${enemy.cNumber}${enemy.enemyCount > 1 ? ` ×${enemy.enemyCount}` : ""}`,
+        position.x, position.y, 12, COLORS.text, true);
+    }
 
     const hud = { x: 12, y: 12, w: Math.min(230, state.width * 0.35), h: 62 };
     drawPanel(hud.x, hud.y, hud.w, hud.h, COLORS.blue, 0.82);
