@@ -22,15 +22,18 @@
   const MAX_SPAWN_INTERVAL = 3600;
   const MERGE_CHANCE = 0.7;
   const MAX_MERGED_SHARE = 0.4;
+  const ENEMY_WANDER_DURATION = 6000;
+  const ENEMY_CLUSTER_RADIUS = 250;
   const state = {
     width: innerWidth, height: innerHeight, dpr: 1,
     screen: "home", time: 0, lastFrame: 0, nextSpawnAt: 0, lastRipple: 0,
     score: 0, health: 3, high: 0, spaceHeld: false,
-    zoomOutPercent: 200, nextEnemyCNumberEven: true,
-    camera: { x: 0, y: 0, zoom: CAMERA_ZOOM / 2, initialized: false },
+    zoomOutPercent: 250, nextEnemyCNumberEven: true,
+    camera: { x: 0, y: 0, zoom: CAMERA_ZOOM / 2.5, initialized: false },
     player: { x: 0, y: 0, size: 50, speed: 5, remX: 0, remY: 0 },
     enemies: [], rockets: [], enemyShots: [], grenades: [], nukes: [],
     shockwaves: [], explosions: [], blasts: [], ripples: [],
+    enemyClusters: [], nextEnemyClusterScanAt: 0,
     crosshair: null, aim: { x: 0, y: -1 },
     joystick: { pointer: null, x: 0, y: 0 },
     skill: { pointer: null, name: null, start: null, direction: null },
@@ -250,6 +253,8 @@
         enemyCount: 1, maxHp: 100, mergeAttempted: false,
         orbitDirection: Math.random() < 0.5 ? -1 : 1,
         orbitSpeed: 0.0025 + Math.random() * 0.0025,
+        spawnTime: state.time, wanderPhase: Math.random() * TAU,
+        clusterTarget: null, nextClusterSearchAt: 0,
         nextShot: state.time + 4000, hp: 100, pullTarget: null, pullUntil: 0,
       });
     }
@@ -316,6 +321,8 @@
     state.skill.direction = null;
     state.nextSpawnAt = state.time + randomSpawnInterval();
     state.nextEnemyCNumberEven = true;
+    state.enemyClusters = [];
+    state.nextEnemyClusterScanAt = state.time;
     state.lastRipple = state.time;
     for (const key of ["enemies", "rockets", "enemyShots", "grenades", "nukes",
       "shockwaves", "explosions", "blasts", "ripples"]) state[key].length = 0;
@@ -730,8 +737,8 @@
     } else if (name === "reset") {
       state.layout = defaultLayout();
       state.controlSize = 1;
-      state.zoomOutPercent = 200;
-      state.camera.zoom = CAMERA_ZOOM / 2;
+      state.zoomOutPercent = 250;
+      state.camera.zoom = CAMERA_ZOOM / 2.5;
       state.orbitRadius = Math.min(state.width, state.height) * 0.4 / state.camera.zoom;
       saveSettings();
     } else if (name === "resume") setScreen("playing");
@@ -881,11 +888,34 @@
       if (d) {
         const rx = dx / d;
         const ry = dy / d;
-        const tx = -ry * enemy.orbitDirection;
-        const ty = rx * enemy.orbitDirection;
-        const radial = clamp((d - state.orbitRadius) * 0.02, -2, 2);
-        enemy.x += (rx * radial + tx * enemy.orbitSpeed * state.orbitRadius) * factor;
-        enemy.y += (ry * radial + ty * enemy.orbitSpeed * state.orbitRadius) * factor;
+        if (state.time - enemy.spawnTime < ENEMY_WANDER_DURATION) {
+          const wander = Math.sin(state.time * 0.0015 + enemy.wanderPhase) * 0.55;
+          const direction = normalize({
+            x: rx - ry * wander,
+            y: ry + rx * wander,
+          });
+          enemy.x += direction.x * 1.3 * factor;
+          enemy.y += direction.y * 1.3 * factor;
+        } else {
+          if (state.time >= enemy.nextClusterSearchAt) {
+            enemy.clusterTarget = findEnemyClusterTarget(enemy);
+            enemy.nextClusterSearchAt = state.time + 850 + Math.random() * 350;
+          }
+          const target = enemy.clusterTarget || player;
+          const targetX = target.x - enemy.x;
+          const targetY = target.y - enemy.y;
+          const targetDistance = Math.hypot(targetX, targetY);
+          if (targetDistance > 58) {
+            enemy.x += targetX / targetDistance * 1.5 * factor;
+            enemy.y += targetY / targetDistance * 1.5 * factor;
+          } else if (targetDistance > 0) {
+            const tx = -targetY / targetDistance * enemy.orbitDirection;
+            const ty = targetX / targetDistance * enemy.orbitDirection;
+            const radial = clamp((targetDistance - 42) * 0.035, -0.65, 0.65);
+            enemy.x += (targetX / targetDistance * radial + tx * 0.45) * factor;
+            enemy.y += (targetY / targetDistance * radial + ty * 0.45) * factor;
+          }
+        }
       }
     }
     if (state.time >= enemy.nextShot) {
@@ -896,6 +926,93 @@
         x: start.x, y: start.y, direction: dir, size: 10, trail: [],
       });
       enemy.nextShot = state.time + 1800 + Math.random() * 800;
+    }
+  }
+
+  function findEnemyClusterTarget(enemy) {
+    let bestTarget = null;
+    let bestScore = -Infinity;
+    let nearestEnemy = null;
+    let nearestDistance = Infinity;
+
+    for (const candidate of state.enemies) {
+      if (candidate === enemy) continue;
+      const candidateDistance = distance(enemy, candidate);
+      if (candidateDistance < nearestDistance) {
+        nearestDistance = candidateDistance;
+        nearestEnemy = candidate;
+      }
+    }
+
+    for (const cluster of state.enemyClusters) {
+      if (cluster.members.length < 2) continue;
+      const clusterDistance = distance(enemy, cluster);
+      const score = cluster.mass ** 1.7 / (1 + clusterDistance / 650);
+      if (score > bestScore) {
+        bestScore = score;
+        bestTarget = { x: cluster.x, y: cluster.y };
+      }
+    }
+
+    return bestTarget || nearestEnemy;
+  }
+
+  function refreshEnemyClusters() {
+    if (state.time < state.nextEnemyClusterScanAt) return;
+    state.nextEnemyClusterScanAt = state.time + 700;
+    const enemies = state.enemies;
+    const parents = enemies.map((_, index) => index);
+    const find = (index) => {
+      while (parents[index] !== index) {
+        parents[index] = parents[parents[index]];
+        index = parents[index];
+      }
+      return index;
+    };
+    const union = (a, b) => {
+      const rootA = find(a);
+      const rootB = find(b);
+      if (rootA !== rootB) parents[rootB] = rootA;
+    };
+    const cellSize = ENEMY_CLUSTER_RADIUS;
+    const cells = new Map();
+    const cellKey = (x, y) => `${x},${y}`;
+
+    for (let i = 0; i < enemies.length; i++) {
+      const enemy = enemies[i];
+      const cellX = Math.floor(enemy.x / cellSize);
+      const cellY = Math.floor(enemy.y / cellSize);
+      for (let x = cellX - 1; x <= cellX + 1; x++) {
+        for (let y = cellY - 1; y <= cellY + 1; y++) {
+          for (const otherIndex of cells.get(cellKey(x, y)) || []) {
+            if (distance(enemy, enemies[otherIndex]) <= ENEMY_CLUSTER_RADIUS) {
+              union(i, otherIndex);
+            }
+          }
+        }
+      }
+      const key = cellKey(cellX, cellY);
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(i);
+    }
+
+    const clusters = new Map();
+    for (let i = 0; i < enemies.length; i++) {
+      const root = find(i);
+      if (!clusters.has(root)) {
+        clusters.set(root, { x: 0, y: 0, mass: 0, members: [] });
+      }
+      const cluster = clusters.get(root);
+      const enemy = enemies[i];
+      cluster.mass += enemy.enemyCount;
+      cluster.x += enemy.x * enemy.enemyCount;
+      cluster.y += enemy.y * enemy.enemyCount;
+      cluster.members.push(enemy);
+    }
+    state.enemyClusters = [...clusters.values()];
+    for (const cluster of state.enemyClusters) {
+      cluster.x /= cluster.mass;
+      cluster.y /= cluster.mass;
     }
   }
 
@@ -974,6 +1091,7 @@
         Math.abs(rocket.x - enemy.x) < (enemy.size + rocket.size) / 2 &&
         Math.abs(rocket.y - enemy.y) < (enemy.size + rocket.size) / 2);
       if (target) {
+        state.blasts.push(makeBlast({ x: rocket.x, y: rocket.y }, 0.28));
         damageEnemy(target, 68);
         remove(state.rockets, rocket);
       } else if (d <= 10) remove(state.rockets, rocket);
@@ -985,6 +1103,7 @@
       grenade.y = grenade.start.y + (grenade.target.y - grenade.start.y) * progress;
       if (state.time >= grenade.detonateAt) {
         state.shockwaves.push({ x: grenade.target.x, y: grenade.target.y, start: state.time });
+        state.blasts.push(makeBlast(grenade.target, 0.62));
         for (const enemy of [...state.enemies]) {
           const d = distance(enemy, grenade.target);
           if (d <= 230) damageEnemy(enemy, 35);
@@ -1036,18 +1155,27 @@
     if (item.trail.length > limit) item.trail.shift();
   }
 
-  function makeBlast(position) {
-    const smoke = Array.from({ length: 22 }, () => {
+  function makeBlast(position, scale = 1) {
+    const smoke = Array.from({ length: Math.max(8, Math.round(34 * scale)) }, () => {
       const angle = Math.random() * TAU;
       const direction = { x: Math.cos(angle), y: Math.sin(angle) };
-      const offset = Math.random() * 95;
+      const offset = Math.random() * 95 * scale;
       return {
         dx: direction.x, dy: direction.y,
         ox: direction.x * offset, oy: direction.y * offset,
-        radius: 18 + Math.random() * 28,
+        radius: (18 + Math.random() * 28) * scale,
       };
     });
-    return { x: position.x, y: position.y, start: state.time, smoke };
+    const sparks = Array.from({ length: Math.max(5, Math.round(18 * scale)) }, () => {
+      const angle = Math.random() * TAU;
+      return {
+        dx: Math.cos(angle), dy: Math.sin(angle),
+        speed: (70 + Math.random() * 190) * scale,
+        radius: (2 + Math.random() * 4) * scale,
+        hue: Math.random() < 0.5 ? 35 : 190,
+      };
+    });
+    return { x: position.x, y: position.y, start: state.time, scale, smoke, sparks };
   }
 
   function remove(array, item) {
@@ -1082,6 +1210,7 @@
       spawnEnemyWave();
       state.nextSpawnAt = state.time + randomSpawnInterval();
     }
+    refreshEnemyClusters();
     for (const enemy of state.enemies) updateEnemy(enemy, factor);
     mergeNearbyEnemies();
     updateProjectiles(factor);
@@ -1270,15 +1399,64 @@
   function drawBlast(blast) {
     const age = state.time - blast.start;
     const progress = Math.min(1, age / 1400);
+    const scale = blast.scale;
+    if (age < 240) {
+      const flash = ctx.createRadialGradient(blast.x, blast.y, 0, blast.x, blast.y, 210 * scale);
+      flash.addColorStop(0, `rgba(255,255,225,${0.75 * (1 - age / 240)})`);
+      flash.addColorStop(0.28, `rgba(93,235,255,${0.42 * (1 - age / 240)})`);
+      flash.addColorStop(1, "rgba(90,130,255,0)");
+      ctx.fillStyle = flash;
+      ctx.beginPath();
+      ctx.arc(blast.x, blast.y, 210 * scale, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "lighter";
     for (const puff of blast.smoke) {
       const puffProgress = Math.min(1, age / 1100);
-      const x = blast.x + puff.ox + puff.dx * puffProgress * 55;
-      const y = blast.y + puff.oy + puff.dy * puffProgress * 55;
+      const x = blast.x + puff.ox + puff.dx * puffProgress * 55 * scale;
+      const y = blast.y + puff.oy + puff.dy * puffProgress * 55 * scale;
+      const r = puff.radius * (0.7 + puffProgress * 0.8);
+      const glow = ctx.createRadialGradient(x, y, r * 0.15, x, y, r * 1.5);
+      glow.addColorStop(0, `rgba(255,220,170,${0.2 * (1 - progress)})`);
+      glow.addColorStop(0.45, `rgba(90,220,255,${0.14 * (1 - progress)})`);
+      glow.addColorStop(1, "rgba(90,120,255,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 1.5, 0, TAU);
+      ctx.fill();
+    }
+    for (const spark of blast.sparks) {
+      const sparkProgress = clamp(age / 520, 0, 1);
+      const alpha = (1 - sparkProgress) * (1 - progress);
+      const x = blast.x + spark.dx * spark.speed * sparkProgress;
+      const y = blast.y + spark.dy * spark.speed * sparkProgress;
+      const radius = spark.radius * (1 - sparkProgress * 0.65);
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 3);
+      glow.addColorStop(0, `hsla(${spark.hue},100%,90%,${alpha})`);
+      glow.addColorStop(0.3, `hsla(${spark.hue},100%,65%,${alpha * 0.8})`);
+      glow.addColorStop(1, `hsla(${spark.hue},100%,55%,0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, radius * 3, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+    for (const puff of blast.smoke) {
+      const puffProgress = Math.min(1, age / 1100);
+      const x = blast.x + puff.ox + puff.dx * puffProgress * 55 * scale;
+      const y = blast.y + puff.oy + puff.dy * puffProgress * 55 * scale;
       const r = puff.radius * (0.7 + puffProgress * 0.8);
       const shade = Math.max(25, Math.round(78 - progress * 48));
-      circle(x, y, r, `rgb(${shade}, ${shade + 5}, ${Math.min(115, shade + 24)})`);
+      const smoke = ctx.createRadialGradient(x - r * 0.25, y - r * 0.3, r * 0.08, x, y, r);
+      smoke.addColorStop(0, `rgba(${shade + 42}, ${shade + 50}, ${Math.min(180, shade + 80)}, ${0.34 * (1 - progress)})`);
+      smoke.addColorStop(0.62, `rgba(${shade}, ${shade + 8}, ${Math.min(145, shade + 36)}, ${0.25 * (1 - progress)})`);
+      smoke.addColorStop(1, `rgba(${shade}, ${shade + 8}, ${Math.min(145, shade + 36)}, 0)`);
+      ctx.fillStyle = smoke;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fill();
     }
-    const radius = progress * 340;
+    const radius = progress * 340 * scale;
     if (radius > 0) {
       ctx.strokeStyle = "#ffb20f";
       ctx.lineWidth = 8;
