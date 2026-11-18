@@ -544,23 +544,44 @@
         label(`BEST SCORE  ${state.high}`, state.width / 2, py + panelH * 0.93, fontSize(16), COLORS.muted);
       }
     } else if (state.screen === "settings") {
-      label("SETTINGS", state.width / 2, py + 40, fontSize(26), COLORS.text, true);
       drawControls(true);
-      const instructionY = py + (wide && panelH < 320 ? 68 : 80);
-      label("Drag a control to move it", state.width / 2, instructionY, fontSize(16), COLORS.muted);
       const bw = Math.min(190, (panelW - 48) / 2);
-      const bh = Math.max(40, Math.min(48, state.height * 0.066));
-      const row = py + panelH - bh * 2.3;
-      makeButton("sizeDown", "SIZE −", state.width / 2 - bw * 0.55, row, bw, bh, COLORS.blue);
-      makeButton("sizeUp", "SIZE +", state.width / 2 + bw * 0.55, row, bw, bh, COLORS.blue);
-      label(`CONTROL SIZE  ${Math.round(state.controlSize * 100)}%`, state.width / 2, row - bh * 0.75, fontSize(16), COLORS.cyan);
-      const zoomRow = row - bh * 2.15;
-      makeButton("zoomDown", "ZOOM −", state.width / 2 - bw * 0.55, zoomRow, bw, bh, COLORS.blue);
-      makeButton("zoomUp", "ZOOM +", state.width / 2 + bw * 0.55, zoomRow, bw, bh, COLORS.blue);
-      label(`ZOOM OUT  ${state.zoomOutPercent}%`, state.width / 2, zoomRow - bh * 0.75, fontSize(16), COLORS.cyan);
-      makeButton("reset", "RESET", state.width / 2 - bw * 0.55, py + panelH - bh * 0.85, bw, bh, COLORS.purple);
-      makeButton("settingsDone", "DONE", state.width / 2 + bw * 0.55, py + panelH - bh * 0.85, bw, bh, COLORS.green);
-      if (state.settingsMessage) label(state.settingsMessage, state.width / 2, py + panelH - bh * 1.55, fontSize(14), COLORS.muted);
+      const leftX = state.width / 2 - bw * 0.55;
+      const rightX = state.width / 2 + bw * 0.55;
+      const shortLandscape = wide && panelH < 320;
+      if (shortLandscape) {
+        const bh = clamp(panelH * 0.16, 28, 36);
+        const row = (fraction) => py + panelH * fraction;
+        label("SETTINGS", state.width / 2, row(0.12), fontSize(26), COLORS.text, true);
+        label(`ZOOM OUT  ${state.zoomOutPercent}%`, state.width / 2, row(0.26), fontSize(16), COLORS.cyan);
+        makeButton("zoomDown", "ZOOM −", leftX, row(0.39), bw, bh, COLORS.blue);
+        makeButton("zoomUp", "ZOOM +", rightX, row(0.39), bw, bh, COLORS.blue);
+        label(`CONTROL SIZE  ${Math.round(state.controlSize * 100)}%`,
+          state.width / 2, row(0.53), fontSize(16), COLORS.cyan);
+        makeButton("sizeDown", "SIZE −", leftX, row(0.66), bw, bh, COLORS.blue);
+        makeButton("sizeUp", "SIZE +", rightX, row(0.66), bw, bh, COLORS.blue);
+        makeButton("reset", "RESET", leftX, row(0.88), bw, bh, COLORS.purple);
+        makeButton("settingsDone", "DONE", rightX, row(0.88), bw, bh, COLORS.green);
+      } else {
+        label("SETTINGS", state.width / 2, py + 40, fontSize(26), COLORS.text, true);
+        label("Drag a control to move it", state.width / 2, py + 80, fontSize(16), COLORS.muted);
+        const bh = Math.max(40, Math.min(48, state.height * 0.066));
+        const row = py + panelH - bh * 2.3;
+        makeButton("sizeDown", "SIZE −", leftX, row, bw, bh, COLORS.blue);
+        makeButton("sizeUp", "SIZE +", rightX, row, bw, bh, COLORS.blue);
+        label(`CONTROL SIZE  ${Math.round(state.controlSize * 100)}%`,
+          state.width / 2, row - bh * 0.75, fontSize(16), COLORS.cyan);
+        const zoomRow = row - bh * 2.15;
+        makeButton("zoomDown", "ZOOM −", leftX, zoomRow, bw, bh, COLORS.blue);
+        makeButton("zoomUp", "ZOOM +", rightX, zoomRow, bw, bh, COLORS.blue);
+        label(`ZOOM OUT  ${state.zoomOutPercent}%`,
+          state.width / 2, zoomRow - bh * 0.75, fontSize(16), COLORS.cyan);
+        makeButton("reset", "RESET", leftX, py + panelH - bh * 0.85, bw, bh, COLORS.purple);
+        makeButton("settingsDone", "DONE", rightX, py + panelH - bh * 0.85, bw, bh, COLORS.green);
+        if (state.settingsMessage) {
+          label(state.settingsMessage, state.width / 2, py + panelH - bh * 1.55, fontSize(14), COLORS.muted);
+        }
+      }
     } else if (state.screen === "help") {
       label("HOW TO PLAY", state.width / 2, py + 52, fontSize(28), COLORS.text, true);
       const lines = [
