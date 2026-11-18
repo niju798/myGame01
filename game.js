@@ -16,10 +16,13 @@
     high: "neon-survivor-high-score",
     settings: "neon-survivor-controls",
   };
+  const CAMERA_ZOOM = 0.78;
+  const CAMERA_SMOOTHING_MS = 140;
   const state = {
     width: innerWidth, height: innerHeight, dpr: 1,
     screen: "home", time: 0, lastFrame: 0, lastSpawn: 0, lastRipple: 0,
     score: 0, health: 3, high: 0, spaceHeld: false,
+    camera: { x: 0, y: 0, zoom: CAMERA_ZOOM, initialized: false },
     player: { x: 0, y: 0, size: 50, speed: 5, remX: 0, remY: 0 },
     enemies: [], rockets: [], enemyShots: [], grenades: [], nukes: [],
     shockwaves: [], explosions: [], blasts: [], ripples: [],
@@ -45,6 +48,14 @@
   const playerCenter = () => ({
     x: state.player.x + state.player.size / 2,
     y: state.player.y + state.player.size / 2,
+  });
+  const screenToWorld = (point) => ({
+    x: state.camera.x + (point.x - state.width / 2) / state.camera.zoom,
+    y: state.camera.y + (point.y - state.height / 2) / state.camera.zoom,
+  });
+  const worldToScreen = (point) => ({
+    x: state.width / 2 + (point.x - state.camera.x) * state.camera.zoom,
+    y: state.height / 2 + (point.y - state.camera.y) * state.camera.zoom,
   });
   const controlUnit = () => {
     const shortestSide = Math.min(state.width, state.height);
@@ -111,13 +122,13 @@
     canvas.width = Math.round(state.width * state.dpr);
     canvas.height = Math.round(state.height * state.dpr);
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
-    if (state.player.x || state.player.y) {
-      const center = playerCenter();
-      state.player.x = center.x / oldW * state.width - state.player.size / 2;
-      state.player.y = center.y / oldH * state.height - state.player.size / 2;
-    } else {
+    if (!state.camera.initialized) {
       state.player.x = (state.width - state.player.size) / 2;
       state.player.y = (state.height - state.player.size) / 2;
+      const center = playerCenter();
+      state.camera.x = center.x;
+      state.camera.y = center.y;
+      state.camera.initialized = true;
     }
     state.stars = Array.from({ length: 72 }, () => ({
       x: Math.random() * state.width,
@@ -253,6 +264,9 @@
     state.spaceHeld = false;
     state.player.x = (state.width - state.player.size) / 2;
     state.player.y = (state.height - state.player.size) / 2;
+    const center = playerCenter();
+    state.camera.x = center.x;
+    state.camera.y = center.y;
     state.player.remX = 0;
     state.player.remY = 0;
     state.joystick.pointer = null;
@@ -293,11 +307,11 @@
       direction = normalize(direction);
       state.aim = { ...direction };
       const range = name === "attack"
-        ? Math.max(state.width, state.height)
-        : Math.min(state.width, state.height) * 0.45;
+        ? Math.max(state.width, state.height) / state.camera.zoom
+        : Math.min(state.width, state.height) * 0.45 / state.camera.zoom;
       target = {
-        x: clamp(start.x + direction.x * range, 0, state.width),
-        y: clamp(start.y + direction.y * range, 0, state.height),
+        x: start.x + direction.x * range,
+        y: start.y + direction.y * range,
       };
     }
     const direction = normalize({ x: target.x - start.x, y: target.y - start.y });
@@ -614,7 +628,7 @@
       }
     }
     if (state.skill.direction) {
-      const p = playerCenter();
+      const p = worldToScreen(playerCenter());
       const endX = clamp(p.x + state.skill.direction.x * Math.min(state.width, state.height) * 0.35, 0, state.width);
       const endY = clamp(p.y + state.skill.direction.y * Math.min(state.width, state.height) * 0.35, 0, state.height);
       ctx.strokeStyle = COLORS.cyan;
@@ -703,7 +717,8 @@
 
   function pointerDown(event) {
     canvas.focus({ preventScroll: true });
-    const point = pointerPosition = { x: event.offsetX, y: event.offsetY };
+    const screenPoint = pointerPosition = { x: event.offsetX, y: event.offsetY };
+    const point = screenToWorld(screenPoint);
     if (event.button === 2 && state.screen === "playing") {
       const start = playerCenter();
       state.grenades.push({
@@ -713,8 +728,8 @@
       return;
     }
     if (state.screen === "playing") {
-      if (!hitPlaying(point)) {
-        const grabbed = beginControl(event.pointerId, point);
+      if (!hitPlaying(screenPoint)) {
+        const grabbed = beginControl(event.pointerId, screenPoint);
         if (!grabbed && event.pointerType === "mouse" && event.button === 0) {
           if (state.spaceHeld) {
             const start = playerCenter();
@@ -726,7 +741,7 @@
         }
       }
     } else {
-      hitMenu(point, event.pointerId);
+      hitMenu(screenPoint, event.pointerId);
     }
     try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic pointer */ }
   }
@@ -872,8 +887,8 @@
           saveHighScore();
           setScreen("gameOver");
         }
-      } else if (projectile.x < 0 || projectile.y < 0 ||
-          projectile.x > state.width || projectile.y > state.height) {
+      } else if (Math.abs(projectile.x - state.camera.x) > state.width / state.camera.zoom / 2 + 100 ||
+          Math.abs(projectile.y - state.camera.y) > state.height / state.camera.zoom / 2 + 100) {
         remove(state.enemyShots, projectile);
       }
     }
@@ -950,8 +965,22 @@
     }
   }
 
+  function updateCamera(elapsed) {
+    if (state.screen !== "playing") return;
+    const target = playerCenter();
+    const follow = 1 - Math.exp(-elapsed / CAMERA_SMOOTHING_MS);
+    state.camera.x += (target.x - state.camera.x) * follow;
+    state.camera.y += (target.y - state.camera.y) * follow;
+  }
+
   function drawGame() {
     drawBackground();
+    ctx.save();
+    ctx.translate(
+      state.width / 2 - state.camera.x * state.camera.zoom,
+      state.height / 2 - state.camera.y * state.camera.zoom,
+    );
+    ctx.scale(state.camera.zoom, state.camera.zoom);
     for (const blast of state.blasts) drawBlast(blast);
     for (const ripple of state.ripples) {
       const progress = (state.time - ripple.start) / 520;
@@ -1028,6 +1057,17 @@
       }
     }
 
+    if (state.crosshair && state.time < state.crosshair.expires) {
+      const { x, y } = state.crosshair;
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y);
+      ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8);
+      ctx.stroke();
+    } else state.crosshair = null;
+    ctx.restore();
+
     const hud = { x: 12, y: 12, w: Math.min(230, state.width * 0.35), h: 62 };
     drawPanel(hud.x, hud.y, hud.w, hud.h, COLORS.blue, 0.82);
     label(`HP  ${state.health}`, hud.x + 14, hud.y + 18, fontSize(18), COLORS.green, true, "left");
@@ -1041,16 +1081,6 @@
     ctx.stroke();
     label("Ⅱ", pause.x + pause.w / 2, pause.y + pause.h / 2, fontSize(20), COLORS.text, true);
     drawControls();
-
-    if (state.crosshair && state.time < state.crosshair.expires) {
-      const { x, y } = state.crosshair;
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y);
-      ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8);
-      ctx.stroke();
-    } else state.crosshair = null;
   }
 
   function drawTrails() {
@@ -1131,6 +1161,7 @@
     state.time += elapsed;
     const factor = elapsed / (1000 / 60);
     update(factor);
+    updateCamera(elapsed);
     if (state.screen === "playing") drawGame();
     else drawMenu(state.time);
     requestAnimationFrame(render);
