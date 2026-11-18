@@ -17,10 +17,12 @@
     settings: "neon-survivor-controls",
   };
   const CAMERA_ZOOM = 0.78;
-  const CAMERA_SMOOTHING_MS = 140;
+  const CAMERA_SMOOTHING_MS = 260;
+  const MIN_SPAWN_INTERVAL = 2400;
+  const MAX_SPAWN_INTERVAL = 3600;
   const state = {
     width: innerWidth, height: innerHeight, dpr: 1,
-    screen: "home", time: 0, lastFrame: 0, lastSpawn: 0, lastRipple: 0,
+    screen: "home", time: 0, lastFrame: 0, nextSpawnAt: 0, lastRipple: 0,
     score: 0, health: 3, high: 0, spaceHeld: false,
     camera: { x: 0, y: 0, zoom: CAMERA_ZOOM, initialized: false },
     player: { x: 0, y: 0, size: 50, speed: 5, remX: 0, remY: 0 },
@@ -57,6 +59,15 @@
     x: state.width / 2 + (point.x - state.camera.x) * state.camera.zoom,
     y: state.height / 2 + (point.y - state.camera.y) * state.camera.zoom,
   });
+  const getPointerPosition = (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - bounds.left) * state.width / Math.max(1, bounds.width),
+      y: (event.clientY - bounds.top) * state.height / Math.max(1, bounds.height),
+    };
+  };
+  const randomSpawnInterval = () =>
+    MIN_SPAWN_INTERVAL + Math.random() * (MAX_SPAWN_INTERVAL - MIN_SPAWN_INTERVAL);
   const controlUnit = () => {
     const shortestSide = Math.min(state.width, state.height);
     return state.width / state.height >= 1.5
@@ -116,8 +127,9 @@
   function resize() {
     const oldW = state.width || innerWidth;
     const oldH = state.height || innerHeight;
-    state.width = Math.max(1, innerWidth);
-    state.height = Math.max(1, innerHeight);
+    const bounds = canvas.getBoundingClientRect();
+    state.width = Math.max(1, bounds.width || innerWidth);
+    state.height = Math.max(1, bounds.height || innerHeight);
     state.dpr = Math.min(devicePixelRatio || 1, 2);
     canvas.width = Math.round(state.width * state.dpr);
     canvas.height = Math.round(state.height * state.dpr);
@@ -215,16 +227,18 @@
   }
 
   function spawnEnemyWave() {
-    const first = Math.random() * TAU;
+    const visibleRadius = Math.min(state.width, state.height) / state.camera.zoom / 2;
     for (let i = 0; i < 8; i++) {
-      const angle = first + TAU * i / 8;
+      const angle = Math.random() * TAU;
+      const orbitRadius = visibleRadius * (1.15 + Math.random() * 0.7);
       const p = playerCenter();
       const position = {
-        x: p.x + Math.cos(angle) * state.orbitRadius,
-        y: p.y + Math.sin(angle) * state.orbitRadius,
+        x: p.x + Math.cos(angle) * orbitRadius,
+        y: p.y + Math.sin(angle) * orbitRadius,
       };
       state.enemies.push({
         x: position.x, y: position.y, size: 30,
+        orbitRadius,
         orbitDirection: Math.random() < 0.5 ? -1 : 1,
         orbitSpeed: 0.0025 + Math.random() * 0.0025,
         nextShot: state.time + 4000, hp: 100, pullTarget: null, pullUntil: 0,
@@ -276,7 +290,7 @@
     state.skill.name = null;
     state.skill.start = null;
     state.skill.direction = null;
-    state.lastSpawn = state.time;
+    state.nextSpawnAt = state.time + randomSpawnInterval();
     state.lastRipple = state.time;
     for (const key of ["enemies", "rockets", "enemyShots", "grenades", "nukes",
       "shockwaves", "explosions", "blasts", "ripples"]) state[key].length = 0;
@@ -717,7 +731,7 @@
 
   function pointerDown(event) {
     canvas.focus({ preventScroll: true });
-    const screenPoint = pointerPosition = { x: event.offsetX, y: event.offsetY };
+    const screenPoint = pointerPosition = getPointerPosition(event);
     const point = screenToWorld(screenPoint);
     if (event.button === 2 && state.screen === "playing") {
       const start = playerCenter();
@@ -747,13 +761,13 @@
   }
 
   function pointerMove(event) {
-    const point = pointerPosition = { x: event.offsetX, y: event.offsetY };
+    const point = pointerPosition = getPointerPosition(event);
     if (state.screen === "settings" && moveLayout(point, event.pointerId)) return;
     movePointer(event.pointerId, point);
   }
 
   function pointerUp(event) {
-    const point = pointerPosition = { x: event.offsetX, y: event.offsetY };
+    const point = pointerPosition = getPointerPosition(event);
     if (state.screen === "settings" && state.layoutDrag?.pointer === event.pointerId) {
       moveLayout(point, event.pointerId);
       state.layoutDrag = null;
@@ -788,6 +802,7 @@
     if (event.code === "Space") state.spaceHeld = false;
   });
   window.addEventListener("resize", resize);
+  window.visualViewport?.addEventListener("resize", resize);
 
   function updateEnemy(enemy, factor) {
     if (enemy.pullTarget && state.time < enemy.pullUntil) {
@@ -810,9 +825,10 @@
         const ry = dy / d;
         const tx = -ry * enemy.orbitDirection;
         const ty = rx * enemy.orbitDirection;
-        const radial = clamp((d - state.orbitRadius) * 0.02, -2, 2);
-        enemy.x += (rx * radial + tx * enemy.orbitSpeed * state.orbitRadius) * factor;
-        enemy.y += (ry * radial + ty * enemy.orbitSpeed * state.orbitRadius) * factor;
+        const orbitRadius = enemy.orbitRadius ?? state.orbitRadius;
+        const radial = clamp((d - orbitRadius) * 0.02, -2, 2);
+        enemy.x += (rx * radial + tx * enemy.orbitSpeed * orbitRadius) * factor;
+        enemy.y += (ry * radial + ty * enemy.orbitSpeed * orbitRadius) * factor;
       }
     }
     if (state.time >= enemy.nextShot) {
@@ -941,9 +957,9 @@
       state.lastRipple = state.time;
     }
 
-    if (state.time - state.lastSpawn >= 3000) {
+    if (state.time >= state.nextSpawnAt) {
       spawnEnemyWave();
-      state.lastSpawn = state.time;
+      state.nextSpawnAt = state.time + randomSpawnInterval();
     }
     for (const enemy of state.enemies) updateEnemy(enemy, factor);
     updateProjectiles(factor);
@@ -969,8 +985,16 @@
     if (state.screen !== "playing") return;
     const target = playerCenter();
     const follow = 1 - Math.exp(-elapsed / CAMERA_SMOOTHING_MS);
+    const previousX = state.camera.x;
+    const previousY = state.camera.y;
     state.camera.x += (target.x - state.camera.x) * follow;
     state.camera.y += (target.y - state.camera.y) * follow;
+    const shiftX = (state.camera.x - previousX) * state.camera.zoom;
+    const shiftY = (state.camera.y - previousY) * state.camera.zoom;
+    for (const star of state.stars) {
+      star.x = (star.x - shiftX + state.width) % state.width;
+      star.y = (star.y - shiftY + state.height) % state.height;
+    }
   }
 
   function drawGame() {
@@ -1168,7 +1192,7 @@
   }
 
   resize();
-  state.lastSpawn = 0;
+  state.nextSpawnAt = 0;
   state.lastFrame = performance.now();
   canvas.focus({ preventScroll: true });
   requestAnimationFrame(render);
