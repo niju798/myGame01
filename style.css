@@ -18,6 +18,8 @@ html, body, main {
   background: #080b16;
 }
 
+main { position: relative; }
+
 body { overscroll-behavior: none; }
 
 canvas {
@@ -32,6 +34,46 @@ canvas:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: -4px;
 }
+
+.fullscreen-toggle {
+  position: absolute;
+  z-index: 1;
+  top: max(14px, env(safe-area-inset-top));
+  right: 76px;
+  display: grid;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  place-items: center;
+  color: #ebf5ff;
+  background: #0d192b;
+  border: 1px solid var(--cyan);
+  border-radius: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fullscreen-toggle:hover { background: #122e40; }
+
+.fullscreen-toggle:focus-visible {
+  outline: 2px solid #ebf5ff;
+  outline-offset: 3px;
+}
+
+.fullscreen-toggle svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.fullscreen-toggle .exit-icon,
+.fullscreen-toggle[aria-pressed="true"] .enter-icon { display: none; }
+
+.fullscreen-toggle[aria-pressed="true"] .exit-icon { display: block; }
 
 .sr-only {
   position: absolute;

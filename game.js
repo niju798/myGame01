@@ -3,6 +3,8 @@
 
   const canvas = document.querySelector("#game");
   const ctx = canvas.getContext("2d");
+  const main = document.querySelector("main");
+  const fullscreenToggle = document.querySelector("#fullscreen-toggle");
   const announcement = document.querySelector("#announcement");
   const TAU = Math.PI * 2;
   const COLORS = {
@@ -146,6 +148,33 @@
       state.lastAnnouncement = message;
     }
   }
+
+  function syncFullscreenToggle() {
+    const isFullscreen = document.fullscreenElement === main;
+    fullscreenToggle.setAttribute("aria-pressed", String(isFullscreen));
+    const label = isFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+    fullscreenToggle.setAttribute("aria-label", label);
+    fullscreenToggle.title = label;
+    resize();
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement === main) {
+        await document.exitFullscreen();
+      } else if (typeof main.requestFullscreen === "function") {
+        await main.requestFullscreen();
+      } else {
+        announce("Fullscreen is not supported by this browser");
+      }
+    } catch (error) {
+      console.error("Could not change fullscreen mode:", error);
+      announce("Fullscreen could not be changed");
+    }
+  }
+
+  fullscreenToggle.addEventListener("click", () => { void toggleFullscreen(); });
+  document.addEventListener("fullscreenchange", syncFullscreenToggle);
 
   function setScreen(name) {
     state.screen = name;
