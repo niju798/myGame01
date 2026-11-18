@@ -46,6 +46,12 @@
     x: state.player.x + state.player.size / 2,
     y: state.player.y + state.player.size / 2,
   });
+  const controlUnit = () => {
+    const shortestSide = Math.min(state.width, state.height);
+    return state.width / state.height >= 1.5
+      ? clamp(shortestSide * 0.12, 44, 58)
+      : clamp(shortestSide * 0.1, 34, 58);
+  };
 
   try {
     state.high = Number.parseInt(localStorage.getItem(STORE.high) || "0", 10) || 0;
@@ -54,11 +60,12 @@
   }
 
   function defaultLayout() {
-    const unit = clamp(Math.min(state.width, state.height) * 0.1, 34, 58);
+    const unit = controlUnit();
     const sx = state.width - unit * 1.55;
-    const sy = state.height - unit * 1.65;
+    const bottomOffset = state.width / state.height >= 1.5 ? 1.4 : 1.65;
+    const sy = state.height - unit * bottomOffset;
     return {
-      joystick: [unit * 1.65 / state.width, 1 - unit * 1.65 / state.height],
+      joystick: [unit * 1.65 / state.width, sy / state.height],
       attack: [sx / state.width, sy / state.height],
       grenade: [sx / state.width, (sy - unit * 1.65) / state.height],
       nuke: [sx / state.width, (sy - unit * 3.25) / state.height],
@@ -129,7 +136,7 @@
   }
 
   function controlMetrics() {
-    const unit = clamp(Math.min(state.width, state.height) * 0.1, 34, 58) * state.controlSize;
+    const unit = controlUnit() * state.controlSize;
     const center = (name) => ({
       x: state.layout[name][0] * state.width,
       y: state.layout[name][1] * state.height,
@@ -438,15 +445,14 @@
   function drawMenu() {
     state.ui.clear();
     drawBackground();
-    const compact = state.width < 700;
-    const panelW = Math.min(state.width - 32, compact ? 460 : 650);
+    const wide = state.width / state.height >= 1.5;
+    const compact = Math.min(state.width, state.height) < 500;
+    const panelW = Math.min(state.width - 32, wide ? 820 : compact ? 460 : 650);
     const panelH = state.screen === "settings"
-      ? Math.min(state.height - 28, 330)
-      : Math.min(state.height - 28, compact ? 620 : 590);
+      ? Math.min(state.height - 24, wide ? 360 : 330)
+      : Math.min(state.height - 24, wide ? 380 : compact ? 620 : 590);
     const px = (state.width - panelW) / 2;
-    const py = state.screen === "settings"
-      ? Math.max(14, Math.min(state.height / 2 - panelH / 2, 20))
-      : (state.height - panelH) / 2;
+    const py = Math.max(12, (state.height - panelH) / 2);
     drawPanel(px, py, panelW, panelH);
 
     if (state.screen === "home") {
@@ -455,19 +461,35 @@
       ctx.shadowColor = COLORS.cyan;
       ctx.shadowBlur = 22;
       ctx.fillStyle = COLORS.text;
-      ctx.font = `900 ${fontSize(compact ? 36 : 58)}px system-ui, sans-serif`;
-      ctx.fillText("NEON SURVIVOR", state.width / 2, py + panelH * 0.2);
+      const titleX = wide ? px + panelW * 0.29 : state.width / 2;
+      const centerY = py + panelH / 2;
+      ctx.font = `900 ${fontSize(wide ? 46 : compact ? 36 : 58)}px system-ui, sans-serif`;
+      ctx.fillText("NEON SURVIVOR", titleX, wide ? centerY - 24 : py + panelH * 0.2);
       ctx.shadowBlur = 0;
       ctx.fillStyle = COLORS.cyan;
       ctx.font = `700 ${fontSize(16)}px system-ui, sans-serif`;
-      ctx.fillText("SURVIVE THE SWARM", state.width / 2, py + panelH * 0.29);
-      const bw = Math.min(panelW - 44, 360);
-      const bh = Math.max(48, Math.min(64, state.height * 0.09));
-      const first = py + panelH * 0.48;
-      makeButton("newGame", "NEW GAME", state.width / 2, first, bw, bh, COLORS.cyan);
-      makeButton("settings", "SETTINGS", state.width / 2, first + bh * 1.28, bw, bh, COLORS.purple);
-      makeButton("help", "HOW TO PLAY", state.width / 2, first + bh * 2.56, bw, bh, COLORS.blue);
-      label(`BEST SCORE  ${state.high}`, state.width / 2, py + panelH * 0.93, fontSize(16), COLORS.muted);
+      ctx.fillText("SURVIVE THE SWARM", titleX, wide ? centerY + 18 : py + panelH * 0.29);
+      if (wide) {
+        label(`BEST SCORE  ${state.high}`, titleX, centerY + 66, fontSize(15), COLORS.muted);
+        const bw = Math.min(panelW * 0.38, 330);
+        const bh = clamp(state.height * 0.14, 48, 60);
+        const gap = Math.min(
+          Math.max(bh + 8, panelH * 0.21),
+          Math.max(0, (panelH - bh) / 2 - 8),
+        );
+        const actionX = px + panelW * 0.73;
+        makeButton("newGame", "NEW GAME", actionX, centerY - gap, bw, bh, COLORS.cyan);
+        makeButton("settings", "SETTINGS", actionX, centerY, bw, bh, COLORS.purple);
+        makeButton("help", "HOW TO PLAY", actionX, centerY + gap, bw, bh, COLORS.blue);
+      } else {
+        const bw = Math.min(panelW - 44, 360);
+        const bh = Math.max(48, Math.min(64, state.height * 0.09));
+        const first = py + panelH * 0.48;
+        makeButton("newGame", "NEW GAME", state.width / 2, first, bw, bh, COLORS.cyan);
+        makeButton("settings", "SETTINGS", state.width / 2, first + bh * 1.28, bw, bh, COLORS.purple);
+        makeButton("help", "HOW TO PLAY", state.width / 2, first + bh * 2.56, bw, bh, COLORS.blue);
+        label(`BEST SCORE  ${state.high}`, state.width / 2, py + panelH * 0.93, fontSize(16), COLORS.muted);
+      }
     } else if (state.screen === "settings") {
       label("SETTINGS", state.width / 2, py + 40, fontSize(26), COLORS.text, true);
       drawControls(true);
@@ -490,28 +512,44 @@
         ["BOMB / NUKE", "Tap to auto-target or drag to aim"],
         ["DESKTOP", "Click fire · Right-click bomb · Space + click nuke"],
       ];
-      const lineH = Math.max(45, state.height * 0.078);
+      const lineH = wide
+        ? Math.min(36, (panelH - 136) / lines.length)
+        : Math.max(45, state.height * 0.078);
       lines.forEach(([heading, detail], i) => {
-        const y = py + 120 + i * lineH;
+        const y = py + (wide ? 82 : 120) + i * lineH;
         label(heading, px + 28, y, fontSize(15), COLORS.cyan, true, "left");
-        label(detail, px + 28, y + 22, fontSize(15), COLORS.text, false, "left");
+        label(detail, px + (wide ? 150 : 28), wide ? y : y + 22,
+          fontSize(15), COLORS.text, false, "left");
       });
       makeButton("helpBack", "BACK", state.width / 2, py + panelH - 42, Math.min(300, panelW - 48), 48, COLORS.cyan);
     } else {
       const paused = state.screen === "paused";
-      label(paused ? "PAUSED" : "RUN OVER", state.width / 2, py + panelH * 0.22, fontSize(48), paused ? COLORS.cyan : "#ff697d", true);
-      label(`SCORE  ${state.score}`, state.width / 2, py + panelH * 0.36, fontSize(24), COLORS.text);
-      label(`BEST  ${state.high}`, state.width / 2, py + panelH * 0.44, fontSize(16), COLORS.muted);
+      const centerY = py + panelH / 2;
+      const infoX = wide ? px + panelW * 0.29 : state.width / 2;
+      label(paused ? "PAUSED" : "RUN OVER", infoX, wide ? centerY - 34 : py + panelH * 0.22, fontSize(48), paused ? COLORS.cyan : "#ff697d", true);
+      label(`SCORE  ${state.score}`, infoX, wide ? centerY + 16 : py + panelH * 0.36, fontSize(24), COLORS.text);
+      label(`BEST  ${state.high}`, infoX, wide ? centerY + 50 : py + panelH * 0.44, fontSize(16), COLORS.muted);
       const bw = Math.min(panelW - 48, 340);
-      const bh = Math.max(46, Math.min(58, state.height * 0.08));
-      const first = py + panelH * 0.57;
-      let restartY = first;
-      if (paused) {
-        makeButton("resume", "RESUME", state.width / 2, first, bw, bh, COLORS.cyan);
-        restartY += bh * 1.22;
+      const bh = wide ? clamp(state.height * 0.14, 48, 60) : Math.max(46, Math.min(58, state.height * 0.08));
+      if (wide) {
+        const actionX = px + panelW * 0.73;
+        const gap = Math.min(
+          Math.max(bh + 8, panelH * 0.21),
+          Math.max(0, (panelH - bh) / 2 - 8),
+        );
+        if (paused) makeButton("resume", "RESUME", actionX, centerY - gap, bw, bh, COLORS.cyan);
+        makeButton("restart", "NEW GAME", actionX, centerY, bw, bh, COLORS.green);
+        makeButton("returnHome", "HOME", actionX, centerY + gap, bw, bh, COLORS.purple);
+      } else {
+        const first = py + panelH * 0.57;
+        let restartY = first;
+        if (paused) {
+          makeButton("resume", "RESUME", state.width / 2, first, bw, bh, COLORS.cyan);
+          restartY += bh * 1.22;
+        }
+        makeButton("restart", "NEW GAME", state.width / 2, restartY, bw, bh, COLORS.green);
+        makeButton("returnHome", "HOME", state.width / 2, restartY + bh * 1.22, bw, bh, COLORS.purple);
       }
-      makeButton("restart", "NEW GAME", state.width / 2, restartY, bw, bh, COLORS.green);
-      makeButton("returnHome", "HOME", state.width / 2, restartY + bh * 1.22, bw, bh, COLORS.purple);
     }
   }
 
@@ -994,7 +1032,7 @@
     drawPanel(hud.x, hud.y, hud.w, hud.h, COLORS.blue, 0.82);
     label(`HP  ${state.health}`, hud.x + 14, hud.y + 18, fontSize(18), COLORS.green, true, "left");
     label(`SCORE  ${state.score}`, hud.x + 14, hud.y + 45, fontSize(15), COLORS.text, false, "left");
-    const pause = { x: state.width - 68, y: 14, w: 54, h: 46 };
+    const pause = { x: state.width - 70, y: 14, w: 58, h: 54 };
     state.ui.clear();
     state.ui.set("pause", pause);
     roundRect(pause.x, pause.y, pause.w, pause.h, 12, "#0d192b");
